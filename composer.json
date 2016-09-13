@@ -1,0 +1,32 @@
+{
+  "name": "oqq/event-store-predis-adapter",
+  "description": "Predis Adapter for ProophEventStore",
+  "license": "BSD-3-Clause",
+  "authors": [
+      {
+          "name": "Eric Braun",
+          "email": "eb@oqq.be"
+      }
+  ],
+  "require": {
+    "php": "^7.0",
+    "prooph/common": "^3.7",
+    "prooph/event-store": "^6.4",
+    "predis/predis": "^1.1",
+    "friendsofphp/php-cs-fixer": "^1.12"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^5.5"
+  },
+  "autoload": {
+    "psr-4": {
+      "Prooph\\EventStore\\Adapter\\Predis\\": "src/"
+    }
+  },
+  "autoload-dev": {
+      "psr-4": {
+          "ProophTest\\EventStore\\Adapter\\Predis\\": "tests/",
+          "ProophTest\\EventStore\\": "vendor/prooph/event-store/tests/"
+      }
+  }
+}
