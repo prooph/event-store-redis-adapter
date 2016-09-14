@@ -14,6 +14,7 @@ use Prooph\Common\Messaging\MessageDataAssertion;
 use Prooph\Common\Messaging\MessageFactory;
 use Prooph\EventStore\Adapter\Adapter;
 use Prooph\EventStore\Adapter\Feature\CanHandleTransaction;
+use Prooph\EventStore\Adapter\Predis\RedisCommand\InsertEvent;
 use Prooph\EventStore\Exception\ConcurrencyException;
 use Prooph\EventStore\Exception\RuntimeException;
 use Prooph\EventStore\Adapter\PayloadSerializer;
@@ -46,21 +47,26 @@ final class PredisEventStoreAdapter implements Adapter, CanHandleTransaction
     private static $standardColumns = ['event_id', 'event_name', 'created_at', 'payload', 'version'];
 
     /**
-     * @param Client $predis
+     * @param ClientInterface $redis
      * @param MessageFactory $messageFactory
      * @param MessageConverter $messageConverter
      * @param PayloadSerializer $payloadSerializer
+     *
+     * @todo improve initial script load
      */
     public function __construct(
-        ClientInterface $predis,
+        ClientInterface $redis,
         MessageFactory $messageFactory,
         MessageConverter $messageConverter,
         PayloadSerializer $payloadSerializer
     ) {
-        $this->redis = $predis;
+        $this->redis = $redis;
         $this->messageFactory = $messageFactory;
         $this->messageConverter = $messageConverter;
         $this->payloadSerializer = $payloadSerializer;
+
+        $this->redis->getProfile()->defineCommand('eadd', InsertEvent::class);
+        $this->redis->script('load', (new InsertEvent())->getScript());
     }
 
     /**
@@ -130,7 +136,8 @@ final class PredisEventStoreAdapter implements Adapter, CanHandleTransaction
             throw new \RuntimeException('Transaction already started');
         }
 
-        $this->transaction = $this->redis->transaction();
+        $this->transaction = $this->redis->pipeline();
+        $this->transaction->multi();
     }
 
     /**
@@ -140,6 +147,7 @@ final class PredisEventStoreAdapter implements Adapter, CanHandleTransaction
     {
         $this->assertActiveTransaction();
 
+        $this->transaction->exec();
         $this->transaction->execute();
         $this->transaction = null;
     }
@@ -152,67 +160,61 @@ final class PredisEventStoreAdapter implements Adapter, CanHandleTransaction
         $this->assertActiveTransaction();
 
         $this->transaction->discard();
+        $this->transaction->execute();
         $this->transaction = null;
     }
 
     /**
      * @param StreamName $streamName
      * @param Message $event
-     * @todo pipeline all requests in one commit
      * @todo provide redis key generator service
      */
     private function insertEvent(StreamName $streamName, Message $event)
     {
+        $redisKey = $this->getRedisKey($streamName);
         $eventArr = $this->messageConverter->convertToArray($event);
 
         MessageDataAssertion::assert($eventArr);
 
-        $eventData = [
-            'event_id' => $eventArr['uuid'],
-            'version' => $eventArr['version'],
-            'event_name' => $eventArr['message_name'],
-            'payload' => $this->payloadSerializer->serializePayload($eventArr['payload']),
-            'created_at' => $eventArr['created_at']->format('Y-m-d\TH:i:s.u'),
-        ];
-
-        foreach ($eventArr['metadata'] as $key => $value) {
-            $eventData[$key] = (string) $value;
-        }
-
-        $redisKey = $this->getRedisKey($streamName);
-
-        if (isset($eventData['aggregate_id'])) {
-            $aggregateKey = $this->getAggregateKey($redisKey, $eventData['aggregate_id']);
+        if (isset($eventArr['metadata']['aggregate_id'])) {
+            $aggregateKey = $this->getAggregateKey($redisKey, $eventArr['metadata']['aggregate_id']);
 
             $eventForVersion = $this->getClientContext()->zcount(
                 $aggregateKey,
-                $eventData['version'],
-                $eventData['version']
+                $eventArr['version'],
+                $eventArr['version']
             );
 
             if ($eventForVersion) {
                 throw new ConcurrencyException('At least one event with same version exists already');
             }
-
-            $this->getClientContext()->zadd(
-                $aggregateKey,
-                [$eventData['event_id'] => (int) $eventData['version']]
-            );
         }
 
-        $this->getClientContext()->zadd(
-            $this->getVersionKey($redisKey),
-            [$eventData['event_id'] => (int) $eventData['version']]
-        );
+        // mind the ","
+        $eventData = [
+            'event_id', $eventArr['uuid'],
+            'version', $eventArr['version'],
+            'event_name', $eventArr['message_name'],
+            'payload', $this->payloadSerializer->serializePayload($eventArr['payload']),
+            'created_at', $eventArr['created_at']->format('Y-m-d\TH:i:s.u'),
+        ];
 
-        $this->getClientContext()->zadd(
-            $this->getCreatedSinceKey($redisKey),
-            [$eventData['event_id'] => (float) $eventArr['created_at']->format('U.u')]
-        );
+        foreach ($eventArr['metadata'] as $key => $value) {
+            $eventData[] = (string) $key;
+            $eventData[] = (string) $value;
+        }
 
-        $this->getClientContext()->hmset(
-            $this->getEventDataKey($redisKey, $eventData['event_id']),
-            $eventData
+        call_user_func_array(
+            [$this->getClientContext(), 'eadd'],
+            array_merge([
+                $this->getVersionKey($redisKey),
+                $this->getCreatedSinceKey($redisKey),
+                $this->getEventDataKey($redisKey, $eventArr['uuid']),
+                $aggregateKey ?? '',
+                $eventArr['uuid'],
+                (int) $eventArr['version'],
+                (float) $eventArr['created_at']->format('U.u'),
+            ], $eventData)
         );
     }
 
