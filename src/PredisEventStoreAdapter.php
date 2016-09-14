@@ -14,6 +14,7 @@ use Prooph\Common\Messaging\MessageDataAssertion;
 use Prooph\Common\Messaging\MessageFactory;
 use Prooph\EventStore\Adapter\Adapter;
 use Prooph\EventStore\Adapter\Feature\CanHandleTransaction;
+use Prooph\EventStore\Adapter\Predis\RedisCommand\GetEventsByVersion;
 use Prooph\EventStore\Adapter\Predis\RedisCommand\InsertEvent;
 use Prooph\EventStore\Exception\ConcurrencyException;
 use Prooph\EventStore\Exception\RuntimeException;
@@ -65,8 +66,11 @@ final class PredisEventStoreAdapter implements Adapter, CanHandleTransaction
         $this->messageConverter = $messageConverter;
         $this->payloadSerializer = $payloadSerializer;
 
-        $this->redis->getProfile()->defineCommand('eadd', InsertEvent::class);
+        $this->redis->getProfile()->defineCommand('insertevent', InsertEvent::class);
         $this->redis->script('load', (new InsertEvent())->getScript());
+
+        $this->redis->getProfile()->defineCommand('geteventsbyversion', GetEventsByVersion::class);
+        $this->redis->script('load', (new GetEventsByVersion())->getScript());
     }
 
     /**
@@ -112,7 +116,11 @@ final class PredisEventStoreAdapter implements Adapter, CanHandleTransaction
      */
     public function loadEvents(StreamName $streamName, array $metadata = [], $minVersion = null)
     {
-        $events = $this->getEventsWithMinVersion($this->getRedisKey($streamName), $minVersion);
+        $redisKey = $this->getRedisKey($streamName);
+        $events = $this->redis->geteventsbyversion(
+            $this->getVersionKey($redisKey),
+            $minVersion ?? 1
+        );
 
         return $this->getMessages($events, $metadata);
     }
@@ -122,7 +130,11 @@ final class PredisEventStoreAdapter implements Adapter, CanHandleTransaction
      */
     public function replay(StreamName $streamName, DateTimeInterface $since = null, array $metadata = [])
     {
-        $events = $this->getEventsCreatedSince($this->getRedisKey($streamName), $since);
+        $redisKey = $this->getRedisKey($streamName);
+        $events = $this->redis->geteventsbyversion(
+            $this->getCreatedSinceKey($redisKey),
+            null !== $since ? (float) $since->format('U.u') : 1
+        );
 
         return $this->getMessages($events, $metadata);
     }
@@ -205,13 +217,12 @@ final class PredisEventStoreAdapter implements Adapter, CanHandleTransaction
         }
 
         call_user_func_array(
-            [$this->getClientContext(), 'eadd'],
+            [$this->getClientContext(), 'insertevent'],
             array_merge([
                 $this->getVersionKey($redisKey),
                 $this->getCreatedSinceKey($redisKey),
-                $this->getEventDataKey($redisKey, $eventArr['uuid']),
                 $aggregateKey ?? '',
-                $eventArr['uuid'],
+                $this->getEventDataKey($redisKey, $eventArr['uuid']),
                 (int) $eventArr['version'],
                 (float) $eventArr['created_at']->format('U.u'),
             ], $eventData)
@@ -279,60 +290,13 @@ final class PredisEventStoreAdapter implements Adapter, CanHandleTransaction
     }
 
     /**
-     * @param string $redisKey
-     * @param int|null $minVersion
-     *
-     * @return \Generator
-     */
-    private function getEventsWithMinVersion(string $redisKey, int $minVersion = null)
-    {
-        $eventIds = $this->redis->zrangebyscore(
-            $this->getVersionKey($redisKey),
-            $minVersion ?? 1,
-            '+inf'
-        );
-
-        yield from $this->getEventsFromIds($redisKey, $eventIds);
-    }
-
-    /**
-     * @param string $redisKey
-     * @param DateTimeInterface|null $since
-     *
-     * @return \Generator
-     */
-    private function getEventsCreatedSince(string $redisKey, DateTimeInterface $since = null)
-    {
-        $eventIds = $this->redis->zrangebyscore(
-            $this->getCreatedSinceKey($redisKey),
-            null !== $since ? (float) $since->format('U.u') : 1,
-            '+inf'
-        );
-
-        yield from $this->getEventsFromIds($redisKey, $eventIds);
-    }
-
-    /**
-     * @param string $redisKey
-     * @param array $eventIds
-     *
-     * @return \Generator
-     */
-    private function getEventsFromIds(string $redisKey, array $eventIds)
-    {
-        foreach ($eventIds as $eventId) {
-            yield $this->redis->hgetall($this->getEventDataKey($redisKey, $eventId));
-        }
-    }
-
-    /**
-     * @param Iterator $events
+     * @param Iterator|array $events
      * @param array $metadata
      *
      * @return \Iterator
      * @todo: improve metadata filter
      */
-    private function getMessages(\Iterator $events, array $metadata)
+    private function getMessages($events, array $metadata)
     {
         $messages = [];
 

@@ -24,23 +24,23 @@ final class InsertEvent extends ScriptCommand
     {
         return <<<LUA
 local versionKey = KEYS[1]
-local createdSinceKey = KEYS[2]
-local eventDataKey = KEYS[3]
-local aggregateKey = KEYS[4]
+local createdDateKey = KEYS[2]
+local aggregateKey = KEYS[3]
+local eventDataKey = KEYS[4]
 
-local eventId = ARGV[1]
-local version = ARGV[2]
-local createdAt = ARGV[3]
+local version = ARGV[1]
+local createdAt = ARGV[2]
 
-redis.call('zadd', versionKey, version, eventId)
-redis.call('zadd', createdSinceKey, createdAt, eventId)
+redis.call('zadd', versionKey, version, eventDataKey)
+redis.call('zadd', createdDateKey, createdAt, eventDataKey)
 
 if aggregateKey ~= '' then
-    redis.call('zadd', aggregateKey, version, eventId)
+    redis.call('zadd', aggregateKey, version, eventDataKey)
 end
 
-redis.call('hmset', eventDataKey, unpack(ARGV, 4))
+redis.call('hmset', eventDataKey, unpack(ARGV, 3))
 
+return 1
 LUA;
     }
 }
