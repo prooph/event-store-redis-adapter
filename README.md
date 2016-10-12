@@ -1,7 +1,9 @@
-Predis Adapter for ProophEventStore
+Redis Adapter for ProophEventStore
 =====================================
 
 Use [Prooph Event Store](https://github.com/prooph/event-store) with [Predis](https://github.com/nrk/predis).
+
+#CAUTION: This package is in an experimental state. Don´t use it in production yet!
 
 Requirements
 ------------
