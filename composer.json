@@ -1,5 +1,5 @@
 {
-  "name": "prooph/event-store-predis-adapter",
+  "name": "prooph/event-store-redis-adapter",
   "description": "Predis Adapter for ProophEventStore",
   "license": "BSD-3-Clause",
   "authors": [
