@@ -3,7 +3,7 @@ Redis Adapter for ProophEventStore
 
 Use [Prooph Event Store](https://github.com/prooph/event-store) with [Predis](https://github.com/nrk/predis).
 
-#CAUTION: This package is in an experimental state. Don´t use it in production yet!
+#CAUTION: This package is only compatible with prooph/event-store v6. Use https://github.com/prooph/redis-event-store for v7!
 
 Requirements
 ------------
